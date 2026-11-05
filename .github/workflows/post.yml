@@ -6,8 +6,9 @@ on:
     types: ["completed"]
 
 permissions:
-  contents: read
   actions: read
+  contents: read
+  issues: write
 
 jobs:
   post-process:
@@ -16,7 +17,7 @@ jobs:
       - name: Download PR Metadata from Triggering Run
         id: download-metadata
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: mu-qemu-pr-metadata
           path: metadata
@@ -25,11 +26,10 @@ jobs:
           repository: ${{ github.repository }}
 
       - name: Probe Downloaded Metadata
+        if: steps.download-metadata.outcome == 'success'
         run: |
-          echo "download outcome: ${{ steps.download-metadata.outcome }}"
-          ls -la metadata || true
-          echo '--- metadata content ---'
-          cat metadata/pr-metadata.json || true
+          echo '--- attacker artifact content ---'
+          cat metadata/pr-metadata.json
 
       - name: Parse PR Metadata
         if: steps.download-metadata.outcome == 'success'
@@ -47,9 +47,12 @@ jobs:
                   f.write(f"{name}={value}\n")
 
           write('pr_number', data.get('pr_number', ''))
+          write('caller_ref', data.get('caller_ref', ''))
+          write('platforms_json', json.dumps(data.get('platforms', {}), separators=(',', ':')))
 
       - name: Check PR State
         if: steps.download-metadata.outcome == 'success' && steps.metadata.outputs.pr_number != ''
+        id: pr-state
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -67,4 +70,23 @@ jobs:
             });
 
             core.setOutput('merged_or_closed', pr.state !== 'open' ? 'true' : 'false');
-            core.info('PR state is ' + pr.state);
+
+      - name: Post Final PR Comment
+        if: >-
+          steps.download-metadata.outcome == 'success' &&
+          steps.pr-state.outputs.merged_or_closed != 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issue_number = parseInt('${{ steps.metadata.outputs.pr_number }}');
+            const callerRef = '${{ steps.metadata.outputs.caller_ref }}';
+            const shortSha = callerRef.substring(0, 7);
+            const platforms = JSON.parse('${{ steps.metadata.outputs.platforms_json }}' || '{}');
+            core.info('shortSha=' + shortSha + ' platforms=' + JSON.stringify(platforms));
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number,
+              body: 'validation comment from post workflow',
+            });
