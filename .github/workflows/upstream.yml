@@ -1,0 +1,11 @@
+name: Mu QEMU PR Validation
+
+on:
+  pull_request:
+
+jobs:
+  benign:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Benign upstream step
+        run: echo "benign upstream run"
